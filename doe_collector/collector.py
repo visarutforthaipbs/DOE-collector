@@ -20,7 +20,10 @@ class CollectionError(RuntimeError):
 
 
 def extract_report_date(body_text):
-    date_matches = re.findall(r'(\d{1,2}\.?[ก-๙a-zA-Z]+\.?\d{4})', body_text)
+    date_matches = re.findall(
+        r'(\d{1,2}\s*\.?\s*[ก-๙]+(?:\.[ก-๙]+)*\.?\s*\d{4})',
+        body_text,
+    )
     if not date_matches:
         raise CollectionError(
             "Could not find the dashboard report date; refusing to create a fallback snapshot"
