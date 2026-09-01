@@ -20,15 +20,25 @@ class CollectionError(RuntimeError):
 
 
 def extract_report_date(body_text):
-    date_matches = re.findall(
+    thai_date_matches = re.findall(
         r'(\d{1,2}\s*\.?\s*[ก-๙]+(?:\.[ก-๙]+)*\.?\s*\d{4})',
         body_text,
     )
-    if not date_matches:
-        raise CollectionError(
-            "Could not find the dashboard report date; refusing to create a fallback snapshot"
-        )
-    return date_matches[0]
+    if thai_date_matches:
+        return thai_date_matches[0]
+
+    updated_match = re.search(
+        r'Data Last Updated:\s*(\d{1,2})/(\d{1,2})/(\d{4})',
+        body_text,
+        re.IGNORECASE,
+    )
+    if updated_match:
+        month, _, year = updated_match.groups()
+        return f"{year}-{int(month):02d}"
+
+    raise CollectionError(
+        "Could not find the dashboard report date; refusing to create a fallback snapshot"
+    )
 
 async def check_dashboard_update():
     """Quickly check the report's current update date without crawling all tables."""
@@ -37,7 +47,7 @@ async def check_dashboard_update():
         page = await browser.new_page(viewport={"width": 1920, "height": 1080})
         
         await page.goto(LOOKER_STUDIO_URL, wait_until="domcontentloaded")
-        await asyncio.sleep(8)
+        await asyncio.sleep(15)
         
         body_text = await page.evaluate("() => document.body.innerText")
         report_date = extract_report_date(body_text)
@@ -72,11 +82,9 @@ async def collect_monthly_data(force=False, include_linked=False):
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Connecting to DOE Looker Studio...")
         await page.goto(LOOKER_STUDIO_URL, wait_until="domcontentloaded")
-        # Network responses can arrive later on headless/cloud runners.
-        for _ in range(30):
-            if captured_responses:
-                break
-            await asyncio.sleep(1)
+        # The dashboard can emit bootstrap responses before its data tables arrive.
+        # Give all charts time to load instead of stopping after the first response.
+        await asyncio.sleep(20)
         
         body_text = await page.evaluate("() => document.body.innerText")
         report_date = extract_report_date(body_text)

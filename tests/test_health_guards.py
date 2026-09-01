@@ -58,6 +58,10 @@ class SnapshotHealthGuardTests(unittest.TestCase):
             extract_report_date("Dashboard failed to render")
         self.assertEqual(extract_report_date("ข้อมูล ณ 1.ก.ย.2569"), "1.ก.ย.2569")
         self.assertEqual(extract_report_date("ข้อมูล ณ 1 กันยายน 2569"), "1 กันยายน 2569")
+        self.assertEqual(
+            extract_report_date("Data Last Updated: 9/1/2026 4:37:53 PM"),
+            "2026-09",
+        )
 
 
 if __name__ == "__main__":
