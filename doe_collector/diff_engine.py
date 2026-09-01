@@ -12,7 +12,15 @@ def compute_monthly_diff():
     conn = get_connection()
     cur = conn.cursor()
     
-    cur.execute("SELECT snapshot_id, report_date, scraped_at, total_workers, total_countries, total_provinces FROM snapshots ORDER BY scraped_at ASC")
+    cur.execute("""
+        SELECT snapshot_id, report_date, scraped_at, total_workers,
+               total_countries, total_provinces
+        FROM snapshots
+        WHERE total_workers > 0
+          AND total_countries > 0
+          AND total_provinces > 0
+        ORDER BY scraped_at ASC
+    """)
     snapshots = cur.fetchall()
     
     if len(snapshots) < 1:

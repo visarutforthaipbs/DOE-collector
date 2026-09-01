@@ -2,12 +2,16 @@ name: Monthly DOE Labour Monitor
 
 on:
   schedule:
-    # Runs at 02:00 UTC on the 2nd day of every month
-    - cron: '0 2 2 * *'
+    # Backup run at 13:00 Bangkok, four hours after the lighthouse-core cron.
+    - cron: '0 6 2 * *'
   workflow_dispatch: # Allows manual trigger anytime from GitHub Actions tab
 
 permissions:
   contents: write
+
+concurrency:
+  group: monthly-doe-labour-monitor
+  cancel-in-progress: false
 
 jobs:
   monthly-ingest:
@@ -30,7 +34,16 @@ jobs:
 
       - name: Fetch and Ingest Monthly Snapshot
         run: |
-          python -m doe_collector fetch
+          for attempt in 1 2 3; do
+            if python -m doe_collector fetch; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Fetch attempt $attempt failed; retrying in 60 seconds."
+              sleep 60
+            fi
+          done
+          exit 1
 
       - name: Generate Diff Summary
         run: |

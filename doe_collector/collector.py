@@ -10,9 +10,22 @@ import re
 import os
 from datetime import datetime
 from playwright.async_api import async_playwright
-from .storage import is_snapshot_ingested, save_snapshot, DEFAULT_CURRENT_DIR
+from .storage import is_snapshot_ingested, save_snapshot
 
 LOOKER_STUDIO_URL = "https://datastudio.google.com/u/0/reporting/89607282-a4c6-4a0c-b6e9-a2934c16d885/page/p_rawnmuf5lc"
+
+
+class CollectionError(RuntimeError):
+    """Raised when the dashboard did not produce a trustworthy snapshot."""
+
+
+def extract_report_date(body_text):
+    date_matches = re.findall(r'(\d{1,2}\.?[ก-๙a-zA-Z]+\.?\d{4})', body_text)
+    if not date_matches:
+        raise CollectionError(
+            "Could not find the dashboard report date; refusing to create a fallback snapshot"
+        )
+    return date_matches[0]
 
 async def check_dashboard_update():
     """Quickly check the report's current update date without crawling all tables."""
@@ -24,8 +37,7 @@ async def check_dashboard_update():
         await asyncio.sleep(8)
         
         body_text = await page.evaluate("() => document.body.innerText")
-        date_matches = re.findall(r'(\d{1,2}\.?[ก-๙a-zA-Z]+\.?\d{4})', body_text)
-        report_date = date_matches[0] if date_matches else datetime.now().strftime("%Y-%m")
+        report_date = extract_report_date(body_text)
         
         await browser.close()
         return report_date, body_text
@@ -57,11 +69,14 @@ async def collect_monthly_data(force=False, include_linked=False):
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Connecting to DOE Looker Studio...")
         await page.goto(LOOKER_STUDIO_URL, wait_until="domcontentloaded")
-        await asyncio.sleep(10)
+        # Network responses can arrive later on headless/cloud runners.
+        for _ in range(30):
+            if captured_responses:
+                break
+            await asyncio.sleep(1)
         
         body_text = await page.evaluate("() => document.body.innerText")
-        date_matches = re.findall(r'(\d{1,2}\.?[ก-๙a-zA-Z]+\.?\d{4})', body_text)
-        report_date = date_matches[0] if date_matches else datetime.now().strftime("%Y-%m")
+        report_date = extract_report_date(body_text)
         
         print(f"Dashboard Report Date: {report_date}")
         

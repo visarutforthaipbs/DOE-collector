@@ -16,6 +16,7 @@ Automated monthly monitoring, data ingestion, and time-series change detection f
   * Linked cross-tabulations (Country $\times$ Province, Country $\times$ Job, etc.)
 * **Historical SQLite Database (`doe_labour_monitoring.db`):** Time-series storage tracking monthly trends and net population shifts.
 * **Automated Diff Engine:** Month-over-month ($\Delta$) growth and decline reports.
+* **Safety Gates:** Empty or partial dashboard responses fail the run without changing the database.
 
 ---
 
@@ -39,6 +40,13 @@ cd /Users/lighthouse-control/Desktop/DOE-collector
 # 5. List all snapshots in the database
 .venv/bin/python -m doe_collector list
 ```
+
+## Automation safety
+
+The primary collector runs on `lighthouse-core` at 09:00 Bangkok time on the
+second day of each month. GitHub Actions retries transient failures and runs as
+a staggered backup at 13:00 Bangkok time. A snapshot is saved only when it has
+at least 50 destination countries, 70 provinces, and a non-zero worker total.
 
 ---
 

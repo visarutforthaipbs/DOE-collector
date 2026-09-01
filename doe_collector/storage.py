@@ -13,6 +13,49 @@ DEFAULT_DB_PATH = os.path.join(DEFAULT_PROJECT_DIR, "doe_labour_monitoring.db")
 DEFAULT_SNAPSHOTS_DIR = os.path.join(DEFAULT_PROJECT_DIR, "data", "snapshots")
 DEFAULT_CURRENT_DIR = os.path.join(DEFAULT_PROJECT_DIR, "data", "current")
 
+
+class SnapshotValidationError(ValueError):
+    """Raised when a scrape is incomplete and must not be persisted."""
+
+
+def validate_snapshot_tables(tables_dict):
+    """Reject empty or obviously partial dashboard extractions."""
+    required = {
+        "01_destination_countries": 50,
+        "02_provinces": 70,
+    }
+    problems = []
+
+    for table_name, minimum_rows in required.items():
+        table = tables_dict.get(table_name)
+        rows = table[1] if table else []
+        if len(rows) < minimum_rows:
+            problems.append(
+                f"{table_name} has {len(rows)} rows; expected at least {minimum_rows}"
+            )
+            continue
+
+        valid_counts = []
+        for row in rows:
+            if len(row) < 2:
+                continue
+            try:
+                count = int(str(row[1]).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+            if count >= 0:
+                valid_counts.append(count)
+
+        if len(valid_counts) != len(rows):
+            problems.append(f"{table_name} contains invalid worker counts")
+        elif table_name == "01_destination_countries" and sum(valid_counts) <= 0:
+            problems.append("destination-country worker total is zero")
+
+    if problems:
+        raise SnapshotValidationError(
+            "Snapshot validation failed: " + "; ".join(problems)
+        )
+
 def get_connection(db_path=DEFAULT_DB_PATH):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -103,12 +146,22 @@ def is_snapshot_ingested(report_date, db_path=DEFAULT_DB_PATH):
     init_db(db_path)
     conn = get_connection(db_path)
     cur = conn.cursor()
-    cur.execute("SELECT snapshot_id FROM snapshots WHERE report_date = ?", (report_date,))
+    cur.execute(
+        """
+        SELECT snapshot_id FROM snapshots
+        WHERE report_date = ?
+          AND total_workers > 0
+          AND total_countries > 0
+          AND total_provinces > 0
+        """,
+        (report_date,),
+    )
     row = cur.fetchone()
     conn.close()
     return row is not None
 
 def save_snapshot(report_date, tables_dict, db_path=DEFAULT_DB_PATH, snapshots_dir=DEFAULT_SNAPSHOTS_DIR, current_dir=DEFAULT_CURRENT_DIR):
+    validate_snapshot_tables(tables_dict)
     init_db(db_path)
     
     scraped_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -117,6 +170,8 @@ def save_snapshot(report_date, tables_dict, db_path=DEFAULT_DB_PATH, snapshots_d
     
     # Create snapshot folder and update current
     folder = os.path.join(snapshots_dir, safe_date_tag)
+    storage_root = os.path.dirname(os.path.abspath(db_path))
+    stored_folder = os.path.relpath(os.path.abspath(folder), storage_root)
     os.makedirs(folder, exist_ok=True)
     os.makedirs(current_dir, exist_ok=True)
     
@@ -153,7 +208,17 @@ def save_snapshot(report_date, tables_dict, db_path=DEFAULT_DB_PATH, snapshots_d
     cur.execute("""
     INSERT OR REPLACE INTO snapshots (snapshot_id, report_date, scraped_at, total_workers, total_countries, total_provinces, snapshot_dir)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (snapshot_id, report_date, scraped_at, total_workers, total_countries, total_provinces, folder))
+    """, (snapshot_id, report_date, scraped_at, total_workers, total_countries, total_provinces, stored_folder))
+
+    # Replacing a forced snapshot must not leave rows that disappeared upstream.
+    for table_name in (
+        "monthly_country_stats",
+        "monthly_province_stats",
+        "monthly_job_stats",
+        "monthly_travel_stats",
+        "monthly_country_province",
+    ):
+        cur.execute(f"DELETE FROM {table_name} WHERE snapshot_id = ?", (snapshot_id,))
     
     if "01_destination_countries" in tables_dict:
         for r in tables_dict["01_destination_countries"][1]:
