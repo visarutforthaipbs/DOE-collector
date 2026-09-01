@@ -39,14 +39,20 @@ cd /Users/lighthouse-control/Desktop/DOE-collector
 
 # 5. List all snapshots in the database
 .venv/bin/python -m doe_collector list
+
+# 6. Audit every dataset for completeness, duplicates, and reconciliation
+.venv/bin/python -m doe_collector audit
 ```
 
 ## Automation safety
 
 The primary collector runs on `lighthouse-core` at 09:00 Bangkok time on the
 second day of each month. GitHub Actions retries transient failures and runs as
-a staggered backup at 13:00 Bangkok time. A snapshot is saved only when it has
-at least 50 destination countries, 70 provinces, and a non-zero worker total.
+a staggered backup at 13:00 Bangkok time. A snapshot is saved only when all
+eight base dimensions are present and their worker counts are valid. SQLite
+stores every base dimension plus lossless raw rows for all six linked datasets.
+The `audit` command marks non-reconciling datasets as partial or invalid instead
+of silently treating them as analysis-ready.
 
 ---
 

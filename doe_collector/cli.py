@@ -36,6 +36,9 @@ def main():
     ingest_p = subparsers.add_parser("ingest-local", help="Ingest local CSV files from data/current/ into database")
     ingest_p.add_argument("--date", default="1.ก.ย.2569", help="Report date label")
 
+    # 6. audit
+    subparsers.add_parser("audit", help="Show completeness and reconciliation for every dataset")
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -83,6 +86,34 @@ def main():
                             tables[tname] = (reader[0], reader[1:])
         sid, fld = save_snapshot(args.date, tables)
         print(f"Ingested baseline data into snapshot '{sid}' ({len(tables)} tables).")
+
+    elif args.command == "audit":
+        init_db()
+        conn = get_connection()
+        rows = conn.execute("""
+            SELECT q.dataset_name, q.row_count, q.distinct_key_count,
+                   q.worker_total, q.expected_worker_total, q.status, q.details
+            FROM snapshot_dataset_quality q
+            JOIN snapshots s ON s.snapshot_id = q.snapshot_id
+            WHERE q.snapshot_id = (
+                SELECT snapshot_id FROM snapshots ORDER BY scraped_at DESC LIMIT 1
+            )
+            ORDER BY q.dataset_name
+        """).fetchall()
+        conn.close()
+        if not rows:
+            print("No dataset audit is available. Re-fetch or run ingest-local first.")
+        else:
+            print(f"{'Dataset':<38} | {'Rows':>6} | {'Unique':>6} | {'Workers':>10} | {'Status':<8}")
+            print("-" * 85)
+            for row in rows:
+                print(
+                    f"{row['dataset_name']:<38} | {row['row_count']:>6,} | "
+                    f"{row['distinct_key_count']:>6,} | {row['worker_total']:>10,} | "
+                    f"{row['status']:<8}"
+                )
+                if row['details'] != "reconciles to snapshot total":
+                    print(f"  {row['details']}")
 
     else:
         parser.print_help()

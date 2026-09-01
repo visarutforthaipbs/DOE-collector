@@ -19,6 +19,50 @@ class CollectionError(RuntimeError):
     """Raised when the dashboard did not produce a trustworthy snapshot."""
 
 
+def classify_dimension_table(values):
+    """Return the canonical dataset name and header for a Looker table."""
+    values = [str(value).strip() for value in values if str(value).strip()]
+    value_set = set(values)
+    if not values:
+        return None
+
+    if {"ชาย", "หญิง"}.issubset(value_set):
+        return "08_gender", ["gender", "worker_count"]
+
+    education_markers = ("มัธยม", "ประถม", "ปริญญา", "ประกาศนียบัตร", "วุฒิการศึกษา")
+    if sum(any(marker in value for marker in education_markers) for value in values) >= 2:
+        return "06_education_levels", ["education_level", "worker_count"]
+
+    travel_values = {
+        "บริษัทจัดส่ง", "กรมจัดส่ง", "RE-ENTRY", "VISA RE-ENTRY",
+        "เดินทางด้วยตนเอง", "นายจ้างพาไปทำงาน", "นายจ้างส่งไปฝึกงาน",
+    }
+    if len(value_set.intersection(travel_values)) >= 2:
+        return "05_travel_methods", ["travel_method", "worker_count"]
+
+    embassy_markers = ("สนร.", "สถานเอกอัครราชทูต", "สำนักงานแรงงาน")
+    if sum(any(marker in value for marker in embassy_markers) for value in values) >= 2:
+        return "07_embassy_labour_offices", ["embassy_labour_office", "worker_count"]
+
+    if len(values) >= 500 and any(
+        value.startswith("อำเภอ") or value.startswith("เขต") for value in values
+    ):
+        return "03_districts", ["district", "worker_count"]
+
+    known_provinces = {"อุดรธานี", "นครราชสีมา", "เชียงราย", "ขอนแก่น"}
+    if 70 <= len(values) <= 90 and value_set.intersection(known_provinces):
+        return "02_provinces", ["province", "worker_count"]
+
+    if len(values) > 50 and value_set.intersection({"ไต้หวัน", "อิสราเอล"}):
+        return "01_destination_countries", ["destination_country", "worker_count"]
+
+    known_jobs = {"คนงานเกษตร", "ผลิตผลิตภัณฑ์โลหะ"}
+    if len(values) >= 500 and value_set.intersection(known_jobs):
+        return "04_job_titles", ["standard_job_title", "worker_count"]
+
+    return None
+
+
 def extract_report_date(body_text):
     thai_date_matches = re.findall(
         r'(\d{1,2}\s*\.?\s*[ก-๙]+(?:\.[ก-๙]+)*\.?\s*\d{4})',
@@ -40,17 +84,37 @@ def extract_report_date(body_text):
         "Could not find the dashboard report date; refusing to create a fallback snapshot"
     )
 
+
+async def load_dashboard_report(page, wait_seconds, attempts=3):
+    """Load Looker with bounded retries and return its verified report date."""
+    body_text = ""
+    for attempt in range(1, attempts + 1):
+        if attempt == 1:
+            await page.goto(LOOKER_STUDIO_URL, wait_until="domcontentloaded")
+        else:
+            print(f"Dashboard date not rendered; retrying load ({attempt}/{attempts})...")
+            await page.reload(wait_until="domcontentloaded")
+        await asyncio.sleep(wait_seconds)
+        body_text = await page.evaluate("() => document.body.innerText")
+        try:
+            return extract_report_date(body_text), body_text
+        except CollectionError:
+            pass
+
+    preview = " ".join(body_text.split())[:240] or "<empty page>"
+    raise CollectionError(
+        "Could not find the dashboard report date after "
+        f"{attempts} attempts; page preview: {preview}"
+    )
+
+
 async def check_dashboard_update():
     """Quickly check the report's current update date without crawling all tables."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         page = await browser.new_page(viewport={"width": 1920, "height": 1080})
         
-        await page.goto(LOOKER_STUDIO_URL, wait_until="domcontentloaded")
-        await asyncio.sleep(15)
-        
-        body_text = await page.evaluate("() => document.body.innerText")
-        report_date = extract_report_date(body_text)
+        report_date, body_text = await load_dashboard_report(page, wait_seconds=15)
         
         await browser.close()
         return report_date, body_text
@@ -81,13 +145,9 @@ async def collect_monthly_data(force=False, include_linked=False):
         page.on("response", on_response)
         
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Connecting to DOE Looker Studio...")
-        await page.goto(LOOKER_STUDIO_URL, wait_until="domcontentloaded")
         # The dashboard can emit bootstrap responses before its data tables arrive.
-        # Give all charts time to load instead of stopping after the first response.
-        await asyncio.sleep(20)
-        
-        body_text = await page.evaluate("() => document.body.innerText")
-        report_date = extract_report_date(body_text)
+        # Retry boundedly because Looker occasionally renders an empty shell.
+        report_date, body_text = await load_dashboard_report(page, wait_seconds=20)
         
         print(f"Dashboard Report Date: {report_date}")
         
@@ -110,25 +170,10 @@ async def collect_monthly_data(force=False, include_linked=False):
                         if not vals or not counts:
                             continue
                         
-                        sample = vals[0]
-                        if sample in ['ชาย', 'หญิง']:
-                            raw_tables["08_gender"] = (["gender", "worker_count"], list(zip(vals, counts)))
-                        elif any(x in sample for x in ['มัธยม', 'ประถม', 'ปริญญา', 'ประกาศนียบัตร']):
-                            raw_tables["06_education_levels"] = (["education_level", "worker_count"], list(zip(vals, counts)))
-                        elif sample in ['บริษัทจัดส่ง', 'กรมจัดส่ง', 'RE-ENTRY', 'VISA RE-ENTRY', 'เดินทางด้วยตนเอง']:
-                            raw_tables["05_travel_methods"] = (["travel_method", "worker_count"], list(zip(vals, counts)))
-                        elif any(p in sample for p in ['อุดรธานี', 'นครราชสีมา', 'เชียงราย', 'ขอนแก่น']):
-                            if len(vals) == 77:
-                                raw_tables["02_provinces"] = (["province", "worker_count"], list(zip(vals, counts)))
-                        elif 'อำเภอ' in str(sample) or 'เขต' in str(sample):
-                            if len(vals) > 500:
-                                raw_tables["03_districts"] = (["district", "worker_count"], list(zip(vals, counts)))
-                        elif 'ไต้หวัน' in vals or 'อิสราเอล' in vals:
-                            if len(vals) > 50:
-                                raw_tables["01_destination_countries"] = (["destination_country", "worker_count"], list(zip(vals, counts)))
-                        elif 'คนงานเกษตร' in vals or 'ผลิตผลิตภัณฑ์โลหะ' in vals:
-                            if len(vals) > 500:
-                                raw_tables["04_job_titles"] = (["standard_job_title", "worker_count"], list(zip(vals, counts)))
+                        classification = classify_dimension_table(vals)
+                        if classification:
+                            dataset_name, header = classification
+                            raw_tables[dataset_name] = (header, list(zip(vals, counts)))
 
         print(f"Extracted {len(raw_tables)} base dimension tables.")
         

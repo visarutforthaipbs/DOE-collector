@@ -22,6 +22,9 @@ cd /Users/lighthouse-control/Desktop/DOE-collector
 
 # 5. List all snapshots in the database
 .venv/bin/python -m doe_collector list
+
+# 6. Audit dataset completeness and reconciliation
+.venv/bin/python -m doe_collector audit
 ```
 
 ## What this package does
@@ -33,7 +36,7 @@ Automated pipeline and time-series monitoring for Thailand's Department of Emplo
 | `doe_collector.collector` | Headless Playwright scraper that queries Looker Studio backend RPCs |
 | `doe_collector.storage` | SQLite time-series database (`doe_labour_monitoring.db`) + Snapshot archive |
 | `doe_collector.diff_engine` | Month-over-month delta ($\Delta$) calculator & alert engine |
-| `doe_collector.cli` | CLI commands (`check`, `fetch`, `diff`, `list`, `ingest-local`) |
+| `doe_collector.cli` | CLI commands (`check`, `fetch`, `diff`, `list`, `ingest-local`, `audit`) |
 
 ## Data Directory Structure
 
