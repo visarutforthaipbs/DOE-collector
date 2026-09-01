@@ -1,0 +1,50 @@
+name: Monthly DOE Labour Monitor
+
+on:
+  schedule:
+    # Runs at 02:00 UTC on the 2nd day of every month
+    - cron: '0 2 2 * *'
+  workflow_dispatch: # Allows manual trigger anytime from GitHub Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  monthly-ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          playwright install --with-deps chromium
+
+      - name: Fetch and Ingest Monthly Snapshot
+        run: |
+          python -m doe_collector fetch
+
+      - name: Generate Diff Summary
+        run: |
+          python -m doe_collector diff > LATEST_DIFF.md
+          cat LATEST_DIFF.md
+
+      - name: Commit and Push Updates
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ doe_labour_monitoring.db LATEST_DIFF.md
+          if git diff --staged --quiet; then
+            echo "No data changes detected."
+          else
+            git commit -m "Auto-update monthly DOE labour data [$(date +'%Y-%m-%d')]"
+            git push
+          fi
